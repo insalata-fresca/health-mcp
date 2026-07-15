@@ -17,7 +17,7 @@ public sealed class HealthTools
     private static readonly JsonSerializerOptions _json =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    [McpServerTool(Name = "health_list_weight")]
+    [McpServerTool(Name = "list_weight")]
     [Description(
         "List body-weight data points from Google Health (Withings + Garmin + phone, aggregated via " +
         "Health Connect). Read-only. Optional ISO-8601 start/end bound the window when supplied. " +
@@ -29,7 +29,7 @@ public sealed class HealthTools
         CancellationToken ct = default)
         => ListAsync(client, "weight", start, end, ct);
 
-    [McpServerTool(Name = "health_list_sleep")]
+    [McpServerTool(Name = "list_sleep")]
     [Description(
         "List sleep data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
         "start/end bound the window. Verified data type.")]
@@ -40,7 +40,7 @@ public sealed class HealthTools
         CancellationToken ct = default)
         => ListAsync(client, "sleep", start, end, ct);
 
-    [McpServerTool(Name = "health_list_steps")]
+    [McpServerTool(Name = "list_steps")]
     [Description(
         "List step-count data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
         "start/end bound the window. Verified data type.")]
@@ -51,7 +51,7 @@ public sealed class HealthTools
         CancellationToken ct = default)
         => ListAsync(client, "steps", start, end, ct);
 
-    [McpServerTool(Name = "health_list_datapoints")]
+    [McpServerTool(Name = "list_datapoints")]
     [Description(
         "Generic read of Google Health API v4 data points for ANY data type string. Read-only. " +
         "dataType examples: weight, sleep, steps (verified), heart_rate / activity types (coverage " +
@@ -65,7 +65,7 @@ public sealed class HealthTools
         CancellationToken ct = default)
         => ListAsync(client, dataType, start, end, ct);
 
-    [McpServerTool(Name = "health_list_data_types")]
+    [McpServerTool(Name = "list_data_types")]
     [Description(
         "List the Google Health data types this MCP is configured to advertise (env GOOGLE_HEALTH_DATA_TYPES). " +
         "Read-only, no upstream call. weight/sleep/steps are verified; others are best-effort until confirmed.")]

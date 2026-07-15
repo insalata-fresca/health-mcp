@@ -11,11 +11,11 @@ Built on `Sinapsi.Mcp` + `ModelContextProtocol.AspNetCore` (.NET 8). Default por
 
 | Tool | What it returns |
 |---|---|
-| `health_list_weight(start?, end?)` | body-weight data points |
-| `health_list_sleep(start?, end?)` | sleep data points |
-| `health_list_steps(start?, end?)` | step-count data points |
-| `health_list_datapoints(dataType, start?, end?)` | generic read for ANY data type string |
-| `health_list_data_types()` | the configured/advertised data types (no upstream call) |
+| `list_weight(start?, end?)` | body-weight data points |
+| `list_sleep(start?, end?)` | sleep data points |
+| `list_steps(start?, end?)` | step-count data points |
+| `list_datapoints(dataType, start?, end?)` | generic read for ANY data type string |
+| `list_data_types()` | the configured/advertised data types (no upstream call) |
 
 `weight` / `sleep` / `steps` are verified as returning data. `heart_rate` and other
 activity/fitness types are advertised for coverage but their return is best-effort until
