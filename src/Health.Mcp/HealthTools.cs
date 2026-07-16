@@ -255,6 +255,53 @@ public sealed class HealthTools
         }
     }
 
+    [McpServerTool(Name = "delete_nutrition")]
+    [Description(
+        "Delete a nutrition-log entry from Google Health by its full resource name (the `id` returned by " +
+        "health_log_nutrition, or a `name` from health_list_nutrition, e.g. " +
+        "'users/<uid>/dataTypes/nutrition-log/dataPoints/<id>'). Covered by the nutrition write scope; you can " +
+        "only delete entries this integration created. Irreversible — the entry is removed upstream.")]
+    public static async Task<string> DeleteNutrition(
+        GoogleHealthClient client,
+        HealthOptions opt,
+        [Description("Full resource name of the entry to delete (from log/list; starts with 'users/').")] string name,
+        CancellationToken ct = default)
+    {
+        if (!opt.NutritionWriteEnabled)
+            return Err("disabled", "Nutrition writes are disabled (GOOGLE_HEALTH_NUTRITION_WRITE_ENABLED=false).");
+        if (string.IsNullOrWhiteSpace(name) || !name.Contains("/dataPoints/", StringComparison.Ordinal))
+            return Err("not_supported",
+                "Pass the full resource name from log/list, e.g. users/<uid>/dataTypes/nutrition-log/dataPoints/<id>.");
+
+        try
+        {
+            var res = await client.BatchDeleteAsync(opt.NutritionDataType, new[] { name.Trim() }, ct).ConfigureAwait(false);
+            if (res.Success)
+                return JsonSerializer.Serialize(new
+                {
+                    status = "deleted",
+                    id = name.Trim(),
+                    dataType = opt.NutritionDataType,
+                }, _json);
+
+            var status = res.StatusCode switch
+            {
+                401 or 403 => "unauthorized",
+                404 => "not_found",
+                _ => "unreachable",
+            };
+            return Err(status, $"Google Health API {res.StatusCode}: {res.Body}", opt.NutritionDataType);
+        }
+        catch (Exception ex)
+        {
+            var status = ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)
+                         || ex.Message.Contains("401") || ex.Message.Contains("403")
+                ? "unauthorized"
+                : "unreachable";
+            return Err(status, ex.Message, opt.NutritionDataType);
+        }
+    }
+
     /// <summary>Shape an EnergyQuantity/WeightQuantity: <c>{ &lt;valueKey&gt;: value [, userProvidedUnit] }</c>.</summary>
     private static Dictionary<string, object?> Quantity(string valueKey, double value, string unitEnum)
     {
