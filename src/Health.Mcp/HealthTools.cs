@@ -54,6 +54,19 @@ public sealed class HealthTools
         CancellationToken ct = default)
         => ListAsync(client, "steps", start, end, ct);
 
+    [McpServerTool(Name = "list_nutrition")]
+    [Description(
+        "List nutrition-log entries (meals logged via health_log_nutrition) from Google Health API v4. " +
+        "Read-only. This is the typed read for the `nutrition-log` data type — use it to verify a write or " +
+        "review the day's meals; the generic list_datapoints requires the exact id `nutrition-log` (NOT " +
+        "`nutrition`). Optional ISO-8601 start/end bound the window when supplied.")]
+    public static Task<string> ListNutrition(
+        GoogleHealthClient client,
+        [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
+        [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        CancellationToken ct = default)
+        => ListAsync(client, "nutrition-log", start, end, ct);
+
     [McpServerTool(Name = "list_datapoints")]
     [Description(
         "Generic read of Google Health API v4 data points for ANY data type string. Read-only. " +
