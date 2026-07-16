@@ -108,7 +108,7 @@ public sealed class HealthTools
                 $"Unknown mealType '{mealType}'. Known: {string.Join(", ", opt.MealTypeMap.Keys)}. " +
                 "Override via GOOGLE_HEALTH_MEALTYPE_MAP.");
 
-        // Timestamp → SessionTimeInterval (start==end; UtcOffset as a google-duration in seconds).
+        // Timestamp → SessionTimeInterval (start<end strictly; UtcOffset as a google-duration in seconds).
         DateTimeOffset ts;
         if (string.IsNullOrWhiteSpace(time))
             ts = DateTimeOffset.UtcNow;
@@ -117,6 +117,11 @@ public sealed class HealthTools
             return Err("not_supported", $"Could not parse time '{time}' as ISO-8601.");
 
         var rfc3339 = ts.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        // Google Health requires the interval start to be STRICTLY earlier than end
+        // (a point-in-time start==end is rejected: INVALID_TIME_RANGE). We anchor startTime
+        // at the logged instant (so the dedup date derives from it) and give endTime a
+        // nominal +1min window. Verified live 2026-07-16.
+        var endRfc3339 = ts.ToUniversalTime().AddMinutes(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
         var offsetDuration = $"{(long)ts.Offset.TotalSeconds}s";
         var dateKey = ts.ToUniversalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var displayName = string.IsNullOrWhiteSpace(name) ? "" : name.Trim();
@@ -167,7 +172,7 @@ public sealed class HealthTools
             {
                 ["startTime"] = rfc3339,
                 ["startUtcOffset"] = offsetDuration,
-                ["endTime"] = rfc3339,
+                ["endTime"] = endRfc3339,
                 ["endUtcOffset"] = offsetDuration,
             },
             ["mealType"] = mealEnum,
