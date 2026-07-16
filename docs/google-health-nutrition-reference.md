@@ -28,6 +28,12 @@ health_list_nutrition(start="2026-07-16T00:00:00Z")          # typed, preferred
 health_list_datapoints(dataType="nutrition-log", start=...)  # `nutrition` → INVALID_PARENT_DATA_TYPE_COLLECTION
 ```
 
+**Delete a meal** (by the full resource name returned by log/list):
+```
+health_delete_nutrition(name="users/<uid>/dataTypes/nutrition-log/dataPoints/<id>")
+# → {status:"deleted", id:...}. Irreversible. Only entries this integration created.
+```
+
 **Response semantics (read them, don't assume `ok`):**
 | status | meaning |
 |---|---|
@@ -48,6 +54,7 @@ All are exposed on the bridge with a `health_` prefix (the gateway strips it →
 |---|---|---|
 | `health_log_nutrition` | Write one meal (nutrition-log DataPoint) | Only **write** tool. See semantics above. |
 | `health_list_nutrition` | Read nutrition-log entries | Typed read for `nutrition-log`. |
+| `health_delete_nutrition` | Delete one nutrition-log entry | Pass the full resource `name` (the `id` from log, or a `name` from list). Irreversible; only deletes entries this integration created. |
 | `health_list_datapoints` | Generic read of any data type | Use exact id, e.g. `nutrition-log`, `weight`, `sleep`, `steps`. |
 | `health_list_data_types` | List advertised data types | Now includes `nutrition-log`. |
 | `health_list_weight` / `_sleep` / `_steps` | Typed reads | Aggregated via Health Connect (Garmin/Withings/phone). |
@@ -70,7 +77,7 @@ All are exposed on the bridge with a `health_` prefix (the gateway strips it →
 ## NOT verified / NOT documented — do not claim otherwise
 
 - **Whether API-written nutrition appears in the Google Health (Fitbit) app UI is undocumented.** Google's docs describe a *"Reconciled Stream"* that merges sources but say nothing about API-write → app rendering, and say **nothing about Health Connect** for the nutrition write path. As of testing, entries were **not** visible in the app. Treat app-UI visibility as **unconfirmed**, not guaranteed.
-- Current implementation logs **anonymous food** (the non-preferred, non-editable mode). Moving to **identified food** (resolve a `food` id, then reference it) is the documented-preferred path and a likely improvement — planned, not yet done.
+- Current implementation logs **anonymous food** (`foodDisplayName` + inline macros). The docs prefer **identified food** (a `food` reference), but that is **NOT buildable via the API today**: the `food` data type is `list, get` only (no `search`, no `create`), and `dataPoints.list` filters on time only — so there is **no documented way to resolve a `food` id from a meal name**, and clients cannot create Food resources (catalog is `PUBLIC`/`PRIVATE`, read-only). Anonymous food is therefore the only viable third-party write. (Verified 2026-07-16.)
 
 ## Ruled out
 
