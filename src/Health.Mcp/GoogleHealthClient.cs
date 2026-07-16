@@ -81,15 +81,38 @@ public sealed class GoogleHealthClient(HttpClient http, HealthOptions opt, ILogg
     /// so the tool can return a precise status envelope. This is the ONLY write path; every
     /// read tool is unchanged.
     /// </summary>
-    public async Task<WriteResult> CreateDataPointAsync(
+    public Task<WriteResult> CreateDataPointAsync(
         string dataType, object body, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(dataType))
             throw new ArgumentException("dataType is required.", nameof(dataType));
 
-        var token = await GetAccessTokenAsync(ct).ConfigureAwait(false);
-
         var url = $"{opt.HealthApiBase.TrimEnd('/')}/users/me/dataTypes/{Uri.EscapeDataString(dataType)}/dataPoints";
+        return PostForWriteAsync(url, body, ct);
+    }
+
+    /// <summary>
+    /// Delete data points by full resource <paramref name="names"/> under
+    /// <c>{base}/users/me/dataTypes/{dataType}/dataPoints:batchDelete</c> (body <c>{"names":[...]}</c>).
+    /// Covered by the nutrition.writeonly scope ("edit or delete the data it adds"); a client can
+    /// only delete data its own client wrote. Returns a <see cref="WriteResult"/> (batchDelete
+    /// returns an Operation on success).
+    /// </summary>
+    public Task<WriteResult> BatchDeleteAsync(
+        string dataType, IEnumerable<string> names, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(dataType))
+            throw new ArgumentException("dataType is required.", nameof(dataType));
+
+        var url = $"{opt.HealthApiBase.TrimEnd('/')}/users/me/dataTypes/{Uri.EscapeDataString(dataType)}/dataPoints:batchDelete";
+        return PostForWriteAsync(url, new Dictionary<string, object?> { ["names"] = names }, ct);
+    }
+
+    /// <summary>Shared POST → WriteResult helper (create + batchDelete). Never throws on a
+    /// non-2xx status; the tool layer maps it to a status envelope.</summary>
+    private async Task<WriteResult> PostForWriteAsync(string url, object body, CancellationToken ct)
+    {
+        var token = await GetAccessTokenAsync(ct).ConfigureAwait(false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
         {
