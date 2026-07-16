@@ -46,6 +46,64 @@ public sealed record HealthOptions
     /// caveat as <see cref="StartParam"/>. Empty ⇒ never forward an end param.</summary>
     public string EndParam { get; init; } = "endTime";
 
+    // ── Nutrition WRITE (log_nutrition) config ──────────────────────────────
+    // Every shape/enum below was VERIFIED against the Google Health API v4 discovery
+    // document (https://health.googleapis.com/$discovery/rest?version=v4, fetched
+    // 2026-07-16) — DataPoint.nutritionLog → NutritionLog{ interval(SessionTimeInterval),
+    // foodDisplayName, mealType(enum), energy(EnergyQuantity{kcal}),
+    // totalCarbohydrate/totalFat(WeightQuantity{grams}), nutrients[](NutrientQuantity
+    // {nutrient(enum), quantity(WeightQuantity{grams})}) }. They are STILL kept
+    // env-overridable so a first-live-write 400 (which has never been observed as a
+    // successful 200 write — no live write was performed) is a config fix, not a rebuild.
+
+    /// <summary>Kill-switch for the write tool. When false, <c>log_nutrition</c> returns
+    /// <c>{status:"disabled"}</c> without touching the upstream API. Env
+    /// <c>GOOGLE_HEALTH_NUTRITION_WRITE_ENABLED</c> (default true).</summary>
+    public bool NutritionWriteEnabled { get; init; } = true;
+
+    /// <summary>The dataType path segment for nutrition writes/reads
+    /// (<c>.../dataTypes/{dataType}/dataPoints</c>). VERIFIED = <c>nutrition-log</c>.
+    /// Env <c>GOOGLE_HEALTH_NUTRITION_DATATYPE</c>.</summary>
+    public string NutritionDataType { get; init; } = "nutrition-log";
+
+    /// <summary>The DataPoint key that wraps the nutrition record. VERIFIED = <c>nutritionLog</c>
+    /// (discovery doc DataPoint.nutritionLog). Env <c>GOOGLE_HEALTH_NUTRITION_WRAPPER_KEY</c>.</summary>
+    public string NutritionWrapperKey { get; init; } = "nutritionLog";
+
+    /// <summary>Field name carrying the energy value inside EnergyQuantity. VERIFIED = <c>kcal</c>
+    /// (a raw number, NOT a {unit,value} pair). Env <c>GOOGLE_HEALTH_ENERGY_VALUE_KEY</c>.</summary>
+    public string EnergyValueKey { get; init; } = "kcal";
+
+    /// <summary>Field name carrying the mass value inside WeightQuantity. VERIFIED = <c>grams</c>
+    /// (a raw number). Env <c>GOOGLE_HEALTH_MASS_VALUE_KEY</c>.</summary>
+    public string MassValueKey { get; init; } = "grams";
+
+    /// <summary>Optional EnergyQuantity <c>userProvidedUnit</c> enum to record alongside kcal
+    /// (verified enum incl. <c>KILOCALORIE</c>). Empty ⇒ omit (kcal is already the canonical
+    /// value). Env <c>GOOGLE_HEALTH_ENERGY_UNIT</c>.</summary>
+    public string EnergyUnitEnum { get; init; } = "";
+
+    /// <summary>Optional WeightQuantity <c>userProvidedUnit</c> enum to record alongside grams
+    /// (verified enum incl. <c>GRAM</c>). Empty ⇒ omit. Env <c>GOOGLE_HEALTH_MASS_UNIT</c>.</summary>
+    public string MassUnitEnum { get; init; } = "";
+
+    /// <summary>The Nutrient enum value used for the protein entry. VERIFIED = <c>PROTEIN</c>
+    /// (discovery doc Nutrient enum). Env <c>GOOGLE_HEALTH_PROTEIN_NUTRIENT</c>.</summary>
+    public string ProteinNutrient { get; init; } = "PROTEIN";
+
+    /// <summary>Maps the tool's lower-case meal argument → the Google Health MealType enum.
+    /// VERIFIED enum values (discovery doc): BREAKFAST/LUNCH/DINNER/SNACK (also BEFORE_*,
+    /// AFTER_DINNER, ANYTIME). Env <c>GOOGLE_HEALTH_MEALTYPE_MAP</c> as
+    /// <c>breakfast=BREAKFAST,lunch=LUNCH,dinner=DINNER,snack=SNACK</c>.</summary>
+    public IReadOnlyDictionary<string, string> MealTypeMap { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["breakfast"] = "BREAKFAST",
+            ["lunch"] = "LUNCH",
+            ["dinner"] = "DINNER",
+            ["snack"] = "SNACK",
+        };
+
     public static HealthOptions FromEnvironment()
     {
         static string Req(string k) =>
@@ -55,8 +113,16 @@ public sealed record HealthOptions
         static string Opt(string k, string dflt) =>
             Environment.GetEnvironmentVariable(k) is { Length: > 0 } v ? v : dflt;
 
-        var dataTypes = Opt("GOOGLE_HEALTH_DATA_TYPES", "weight,sleep,steps,heart_rate")
+        static bool Flag(string k, bool dflt) =>
+            Environment.GetEnvironmentVariable(k) is { Length: > 0 } v
+                ? !(v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0")
+                : dflt;
+
+        var dataTypes = Opt("GOOGLE_HEALTH_DATA_TYPES", "weight,sleep,steps,heart_rate,nutrition-log")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var mealMap = ParseMap(
+            Opt("GOOGLE_HEALTH_MEALTYPE_MAP", "breakfast=BREAKFAST,lunch=LUNCH,dinner=DINNER,snack=SNACK"));
 
         return new HealthOptions
         {
@@ -65,9 +131,39 @@ public sealed record HealthOptions
             RefreshToken = Req("GOOGLE_HEALTH_REFRESH_TOKEN"),
             TokenEndpoint = Opt("GOOGLE_HEALTH_TOKEN_ENDPOINT", "https://oauth2.googleapis.com/token"),
             HealthApiBase = Opt("GOOGLE_HEALTH_API_BASE", "https://health.googleapis.com/v4"),
-            DataTypes = dataTypes.Length > 0 ? dataTypes : ["weight", "sleep", "steps", "heart_rate"],
+            DataTypes = dataTypes.Length > 0
+                ? dataTypes
+                : ["weight", "sleep", "steps", "heart_rate", "nutrition-log"],
             StartParam = Opt("GOOGLE_HEALTH_START_PARAM", "startTime"),
             EndParam = Opt("GOOGLE_HEALTH_END_PARAM", "endTime"),
+            NutritionWriteEnabled = Flag("GOOGLE_HEALTH_NUTRITION_WRITE_ENABLED", true),
+            NutritionDataType = Opt("GOOGLE_HEALTH_NUTRITION_DATATYPE", "nutrition-log"),
+            NutritionWrapperKey = Opt("GOOGLE_HEALTH_NUTRITION_WRAPPER_KEY", "nutritionLog"),
+            EnergyValueKey = Opt("GOOGLE_HEALTH_ENERGY_VALUE_KEY", "kcal"),
+            MassValueKey = Opt("GOOGLE_HEALTH_MASS_VALUE_KEY", "grams"),
+            EnergyUnitEnum = Opt("GOOGLE_HEALTH_ENERGY_UNIT", ""),
+            MassUnitEnum = Opt("GOOGLE_HEALTH_MASS_UNIT", ""),
+            ProteinNutrient = Opt("GOOGLE_HEALTH_PROTEIN_NUTRIENT", "PROTEIN"),
+            MealTypeMap = mealMap.Count > 0 ? mealMap : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["breakfast"] = "BREAKFAST",
+                ["lunch"] = "LUNCH",
+                ["dinner"] = "DINNER",
+                ["snack"] = "SNACK",
+            },
         };
+    }
+
+    /// <summary>Parse a <c>k1=v1,k2=v2</c> env string into a case-insensitive map.</summary>
+    private static Dictionary<string, string> ParseMap(string raw)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var i = pair.IndexOf('=');
+            if (i <= 0 || i >= pair.Length - 1) continue;
+            map[pair[..i].Trim()] = pair[(i + 1)..].Trim();
+        }
+        return map;
     }
 }

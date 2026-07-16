@@ -65,6 +65,56 @@ public sealed class GoogleHealthClient(HttpClient http, HealthOptions opt, ILogg
         return doc.RootElement.Clone();
     }
 
+    /// <summary>
+    /// Outcome of a write (POST create) attempt. Never throws for a non-2xx upstream
+    /// status — the caller maps <see cref="StatusCode"/> to the tool's status envelope
+    /// (401/403 ⇒ unauthorized, 404 ⇒ not_supported, etc.). Throws only for a genuine
+    /// transport failure or a token-refresh failure.
+    /// </summary>
+    public sealed record WriteResult(bool Success, int StatusCode, string Body, JsonElement? Json);
+
+    /// <summary>
+    /// Create (POST) a single data point under <c>{base}/users/me/dataTypes/{dataType}/dataPoints</c>.
+    /// The <paramref name="body"/> is the full DataPoint envelope (already shaped by the tool
+    /// layer, e.g. <c>{"nutritionLog": { ... }}</c>). Returns a <see cref="WriteResult"/>
+    /// carrying the HTTP status + parsed body rather than throwing on a non-success status,
+    /// so the tool can return a precise status envelope. This is the ONLY write path; every
+    /// read tool is unchanged.
+    /// </summary>
+    public async Task<WriteResult> CreateDataPointAsync(
+        string dataType, object body, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(dataType))
+            throw new ArgumentException("dataType is required.", nameof(dataType));
+
+        var token = await GetAccessTokenAsync(ct).ConfigureAwait(false);
+
+        var url = $"{opt.HealthApiBase.TrimEnd('/')}/users/me/dataTypes/{Uri.EscapeDataString(dataType)}/dataPoints";
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(body),
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        var respBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+        JsonElement? json = null;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(respBody))
+            {
+                using var doc = JsonDocument.Parse(respBody);
+                json = doc.RootElement.Clone();
+            }
+        }
+        catch (JsonException) { /* non-JSON error body — surface the raw text instead */ }
+
+        return new WriteResult(resp.IsSuccessStatusCode, (int)resp.StatusCode, Truncate(respBody), json);
+    }
+
     /// <summary>Return a valid cached access token, refreshing it if missing/expired.</summary>
     private async Task<string> GetAccessTokenAsync(CancellationToken ct)
     {
