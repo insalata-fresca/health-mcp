@@ -212,11 +212,23 @@ public sealed class HealthTools
             var res = await client.CreateDataPointAsync(opt.NutritionDataType, body, ct).ConfigureAwait(false);
             if (res.Success)
             {
-                string? newId = res.Json is { ValueKind: JsonValueKind.Object } j
-                    && j.TryGetProperty("name", out var n) ? n.GetString() : null;
+                // The create response is a Long-Running-Operation wrapper:
+                // {"done":true,"response":{"@type":"...DataPoint","name":"users/.../dataPoints/<id>", ...}}
+                // so the created resource id is at response.name, NOT top-level name.
+                string? newId = null;
+                if (res.Json is { ValueKind: JsonValueKind.Object } j)
+                {
+                    if (j.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.Object
+                        && resp.TryGetProperty("name", out var rn))
+                        newId = rn.GetString();
+                    else if (j.TryGetProperty("name", out var n))
+                        newId = n.GetString();
+                }
+                // Honest status semantics: a 2xx create with a real upstream id is "ok";
+                // a 2xx with no id we could parse is surfaced distinctly (never a silent id:null "ok").
                 return JsonSerializer.Serialize(new
                 {
-                    status = "ok",
+                    status = newId is null ? "ok_unverified" : "ok",
                     id = newId,
                     dataType = opt.NutritionDataType,
                     derivedKey,
