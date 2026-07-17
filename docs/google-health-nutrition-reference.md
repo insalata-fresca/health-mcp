@@ -1,6 +1,6 @@
-# Google Health — Nutrition Logging Reference
+# Google Health — Data & Logging Reference
 
-**Audience:** Claude, working in the personal health project. **Last verified:** 2026-07-16.
+**Audience:** Claude, working in the personal health project. **Last verified:** 2026-07-17.
 **Platform:** Google Health API v4 (`health.googleapis.com`, package `google.devicesandservices.health.v4`) — the Fitbit-successor platform. Consumer app: **Google Health (Fitbit)**, `com.fitbit.FitbitMobile`.
 
 This document is grounded in Google's official docs (quoted + linked at the bottom) and in live round-trip tests against the operator's account. Where something is **not** documented or **not** verified, it says so — do not assume beyond this.
@@ -34,6 +34,12 @@ health_delete_nutrition(name="users/<uid>/dataTypes/nutrition-log/dataPoints/<id
 # → {status:"deleted", id:...}. Irreversible. Only entries this integration created.
 ```
 
+**Log / read water (hydration):**
+```
+health_log_hydration(milliliters=500, time="2026-07-17T09:00:00Z")   # time optional; empty = now
+health_list_hydration(start="2026-07-17T00:00:00Z")                  # or list_datapoints(dataType="hydration-log")
+```
+
 **Response semantics (read them, don't assume `ok`):**
 | status | meaning |
 |---|---|
@@ -55,11 +61,28 @@ All are exposed on the bridge with a `health_` prefix (the gateway strips it →
 | `health_log_nutrition` | Write one meal (nutrition-log DataPoint) | Only **write** tool. See semantics above. |
 | `health_list_nutrition` | Read nutrition-log entries | Typed read for `nutrition-log`. |
 | `health_delete_nutrition` | Delete one nutrition-log entry | Pass the full resource `name` (the `id` from log, or a `name` from list). Irreversible; only deletes entries this integration created. |
+| `health_log_hydration` | Log water/liquid intake | `milliliters` (required), `time` optional. Same scope as food. |
+| `health_list_hydration` | Read hydration-log entries | Typed read for `hydration-log`. |
+| `health_list_datapoints` | **Read ANY data type below** | `dataType` = an exact id from the catalog; the workhorse read for all Tier-1 types. |
 | `health_list_datapoints` | Generic read of any data type | Use exact id, e.g. `nutrition-log`, `weight`, `sleep`, `steps`. |
 | `health_list_data_types` | List advertised data types | Now includes `nutrition-log`. |
 | `health_list_weight` / `_sleep` / `_steps` | Typed reads | Aggregated via Health Connect (Garmin/Withings/phone). |
 
 ---
+
+## Full data catalog — everything readable now (Tier 1)
+
+All of the below is readable **today** with the current scopes (activity_and_fitness / health_metrics_and_measurements / sleep / nutrition — all read). Read any of them with `health_list_datapoints(dataType="<id>", start=..., end=...)`. **What actually returns depends on your devices** feeding Health Sync (Garmin, Withings, phone) — the scope grants access; the data has to be there.
+
+**Activity & fitness** — `exercise` (workout sessions), `steps`, `distance`, `active-energy-burned`, `active-minutes`, `active-zone-minutes`, `activity-level`, `altitude`, `vo2-max`, `daily-vo2-max`, `run-vo2-max`, `time-in-heart-rate-zone`, `sedentary-period`, `swim-lengths-data`.
+
+**Metrics & measurements** — `weight`, `body-fat`, `height`, `heart-rate`, `heart-rate-variability`, `daily-heart-rate-variability`, `daily-resting-heart-rate`, `oxygen-saturation`, `daily-oxygen-saturation`, `respiratory-rate-sleep-summary`, `daily-respiratory-rate`, `blood-glucose`, `core-body-temperature`, `daily-heart-rate-zones`, `daily-sleep-temperature-derivations`.
+
+**Sleep** — `sleep`.
+
+**Nutrition & hydration** — `nutrition-log`, `hydration-log`, `food`, `food-measurement-unit`.
+
+`health_list_data_types` returns this advertised set live. NOT included: `floors`, `total-calories`, `calories-in-heart-rate-zone` — these support only `rollup`/`dailyRollup` (no `list`), so `list_datapoints` can't read them.
 
 ## How the underlying API works (documented facts)
 
