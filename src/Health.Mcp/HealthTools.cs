@@ -302,6 +302,101 @@ public sealed class HealthTools
         }
     }
 
+    [McpServerTool(Name = "list_hydration")]
+    [Description(
+        "List hydration-log entries (water/liquid intake) from Google Health API v4. Read-only, " +
+        "typed read for the `hydration-log` data type. Optional ISO-8601 start/end bound the window.")]
+    public static Task<string> ListHydration(
+        GoogleHealthClient client,
+        [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
+        [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        CancellationToken ct = default)
+        => ListAsync(client, "hydration-log", start, end, ct);
+
+    [McpServerTool(Name = "log_hydration")]
+    [Description(
+        "Log a hydration (liquid intake) entry to Google Health. Writes a hydration-log DataPoint " +
+        "(amountConsumed in millilitres). Covered by the same nutrition write scope as food. Returns " +
+        "the real upstream id on success.")]
+    public static async Task<string> LogHydration(
+        GoogleHealthClient client,
+        HealthOptions opt,
+        [Description("Amount of liquid consumed, in millilitres (e.g. 500). Required.")] double milliliters,
+        [Description("ISO-8601 time consumed (e.g. 2026-07-17T09:00:00Z). Empty = now (UTC).")] string time = "",
+        CancellationToken ct = default)
+    {
+        if (!opt.NutritionWriteEnabled)
+            return Err("disabled", "Nutrition/hydration writes are disabled (GOOGLE_HEALTH_NUTRITION_WRITE_ENABLED=false).");
+        if (milliliters <= 0)
+            return Err("not_supported", "milliliters must be > 0.");
+
+        DateTimeOffset ts;
+        if (string.IsNullOrWhiteSpace(time))
+            ts = DateTimeOffset.UtcNow;
+        else if (!DateTimeOffset.TryParse(time, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out ts))
+            return Err("not_supported", $"Could not parse time '{time}' as ISO-8601.");
+
+        var startRfc = ts.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        // start strictly < end (INVALID_TIME_RANGE otherwise) — nominal +1min window.
+        var endRfc = ts.ToUniversalTime().AddMinutes(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        var offset = $"{(long)ts.Offset.TotalSeconds}s";
+
+        var body = new Dictionary<string, object?>
+        {
+            ["hydrationLog"] = new Dictionary<string, object?>
+            {
+                ["interval"] = new Dictionary<string, object?>
+                {
+                    ["startTime"] = startRfc, ["startUtcOffset"] = offset,
+                    ["endTime"] = endRfc, ["endUtcOffset"] = offset,
+                },
+                ["amountConsumed"] = new Dictionary<string, object?>
+                {
+                    ["milliliters"] = milliliters,
+                    ["userProvidedUnit"] = "MILLILITER",
+                },
+            },
+        };
+
+        try
+        {
+            var res = await client.CreateDataPointAsync("hydration-log", body, ct).ConfigureAwait(false);
+            if (res.Success)
+            {
+                string? newId = null;
+                if (res.Json is { ValueKind: JsonValueKind.Object } j)
+                {
+                    if (j.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.Object
+                        && resp.TryGetProperty("name", out var rn))
+                        newId = rn.GetString();
+                    else if (j.TryGetProperty("name", out var n))
+                        newId = n.GetString();
+                }
+                return JsonSerializer.Serialize(new
+                {
+                    status = newId is null ? "ok_unverified" : "ok",
+                    id = newId,
+                    dataType = "hydration-log",
+                    written = new { milliliters, time = startRfc },
+                }, _json);
+            }
+            var status = res.StatusCode switch
+            {
+                401 or 403 => "unauthorized",
+                404 => "not_supported",
+                _ => "unreachable",
+            };
+            return Err(status, $"Google Health API {res.StatusCode}: {res.Body}", "hydration-log");
+        }
+        catch (Exception ex)
+        {
+            var status = ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)
+                         || ex.Message.Contains("401") || ex.Message.Contains("403")
+                ? "unauthorized" : "unreachable";
+            return Err(status, ex.Message, "hydration-log");
+        }
+    }
+
     /// <summary>Shape an EnergyQuantity/WeightQuantity: <c>{ &lt;valueKey&gt;: value [, userProvidedUnit] }</c>.</summary>
     private static Dictionary<string, object?> Quantity(string valueKey, double value, string unitEnum)
     {
