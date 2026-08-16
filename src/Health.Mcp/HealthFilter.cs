@@ -148,10 +148,27 @@ public static class HealthFilter
                 buf[n++] = c;
         var v = new string(buf[..n]);
 
-        if (!dateOnly) return v;
+        if (dateOnly)
+        {
+            // "2026-08-16T00:00:00Z" → "2026-08-16"; an already-bare date passes through.
+            var t = v.IndexOf('T');
+            return t > 0 ? v[..t] : v;
+        }
 
-        // "2026-08-16T00:00:00Z" → "2026-08-16"; an already-bare date passes through.
-        var t = v.IndexOf('T');
-        return t > 0 ? v[..t] : v;
+        // The mirror case, and the one that bit a caller: an INTERVAL or SAMPLE type needs a full
+        // RFC-3339 instant, so a bare "2026-08-16" is rejected upstream. Callers reasonably expect
+        // the same date form to work everywhere — the split between date-keyed and interval-keyed
+        // types is our implementation detail, not theirs — so widen a bare date to the start of
+        // that day rather than making them remember which types are which.
+        return IsBareDate(v) ? v + "T00:00:00Z" : v;
+    }
+
+    /// <summary>True for exactly <c>YYYY-MM-DD</c>.</summary>
+    private static bool IsBareDate(string v)
+    {
+        if (v.Length != 10 || v[4] != '-' || v[7] != '-') return false;
+        for (var i = 0; i < 10; i++)
+            if (i != 4 && i != 7 && !char.IsAsciiDigit(v[i])) return false;
+        return true;
     }
 }

@@ -125,6 +125,38 @@ public class HealthFilterTests
             "daily_vo2_max.date >= \"2026-08-01\"",
             HealthFilter.BuildWindow("daily-vo2-max", "2026-08-01", null));
 
+    [Theory]
+    [InlineData("steps", "steps.interval.start_time")]
+    [InlineData("active-energy-burned", "active_energy_burned.interval.start_time")]
+    [InlineData("weight", "weight.sample_time.physical_time")]
+    public void A_bare_date_on_a_non_daily_type_is_widened_to_a_full_instant(string dataType, string field)
+    {
+        // Reported by a caller: YYYY-MM-DD worked on daily-* but interval types demanded a full
+        // ISO-8601 timestamp. Which types are date-keyed is our implementation detail, not the
+        // caller's, so the same date form now works on all of them.
+        Assert.Equal(
+            $"{field} >= \"2026-08-16T00:00:00Z\"",
+            HealthFilter.BuildWindow(dataType, "2026-08-16", null));
+    }
+
+    [Fact]
+    public void A_full_instant_on_a_non_daily_type_is_left_alone()
+        => Assert.Equal(
+            "steps.interval.start_time >= \"2026-08-16T07:30:00Z\"",
+            HealthFilter.BuildWindow("steps", "2026-08-16T07:30:00Z", null));
+
+    [Theory]
+    [InlineData("2026-8-16")]      // not zero-padded
+    [InlineData("20260816")]       // no separators
+    [InlineData("2026-08-16T")]    // partial instant
+    public void Only_an_exact_YYYY_MM_DD_is_treated_as_a_bare_date(string bound)
+    {
+        // Anything else is passed through and fails upstream naming the value, rather than being
+        // silently "helped" into a different instant than the caller meant.
+        var f = HealthFilter.BuildWindow("steps", bound, null);
+        Assert.DoesNotContain("T00:00:00Z", f);
+    }
+
     [Fact]
     public void A_bound_cannot_contribute_grammar()
     {
