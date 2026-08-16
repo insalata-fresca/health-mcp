@@ -25,8 +25,28 @@ public class HealthFilterTests
     [Theory]
     [InlineData("weight")]
     [InlineData("height")]
+    [InlineData("heart-rate")]
     public void Sample_types_are_classified_as_samples(string dataType)
         => Assert.Equal(HealthFilter.Kind.Sample, HealthFilter.ClassifyKind(dataType));
+
+    [Fact]
+    public void Heart_rate_filters_on_sample_time_not_an_interval()
+    {
+        // Read from a live data point: the payload is heartRate.sampleTime.physicalTime.
+        // Classified as Interval it produced heart_rate.interval.start_time and the API
+        // answered INVALID_DATA_POINT_FILTER_DATA_TYPE_MEMBER — a member that does not exist.
+        Assert.Equal("heart_rate.sample_time.physical_time", HealthFilter.FieldFor("heart-rate"));
+    }
+
+    [Fact]
+    public void Heart_rate_is_a_DEFAULT_sample_type_not_only_a_configured_one()
+    {
+        // This must hold without any env override. The live config.env on the host was a
+        // month stale and carried no GOOGLE_HEALTH_SAMPLE_TYPES at all, so the code default
+        // was what ran — and it was wrong. Config that never renders cannot be the fix.
+        Assert.Contains("heart-rate", HealthFilter.DefaultSampleTypes);
+        Assert.Equal(HealthFilter.Kind.Sample, HealthFilter.ClassifyKind("heart-rate", null));
+    }
 
     [Theory]
     [InlineData("daily-vo2-max")]

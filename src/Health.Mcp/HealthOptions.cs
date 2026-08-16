@@ -27,12 +27,12 @@ public sealed record HealthOptions
 
     /// <summary>
     /// The data types the convenience/aggregate surfaces advertise. <c>weight</c>,
-    /// <c>sleep</c>, <c>steps</c> were verified live returning data. <c>heart_rate</c>
+    /// <c>sleep</c>, <c>steps</c> were verified live returning data. <c>heart-rate</c> (KEBAB —
     /// is included for coverage but its return is to be CONFIRMED by the running service — the
     /// set is env-configurable so it is never hardcode-only. The generic
     /// <c>health_list_datapoints</c> tool accepts ANY data type string regardless.
     /// </summary>
-    public string[] DataTypes { get; init; } = ["weight", "sleep", "steps", "heart_rate"];
+    public string[] DataTypes { get; init; } = ["weight", "sleep", "steps", "heart-rate"];
 
     // ── Time window ─────────────────────────────────────────────────────────
     // StartParam/EndParam are GONE. They defaulted to startTime/endTime, which the v4 API
@@ -134,7 +134,7 @@ public sealed record HealthOptions
                 ? !(v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0")
                 : dflt;
 
-        var dataTypes = Opt("GOOGLE_HEALTH_DATA_TYPES", "weight,sleep,steps,heart_rate,nutrition-log")
+        var dataTypes = Opt("GOOGLE_HEALTH_DATA_TYPES", "weight,sleep,steps,heart-rate,nutrition-log")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         var mealMap = ParseMap(
@@ -149,7 +149,7 @@ public sealed record HealthOptions
             HealthApiBase = Opt("GOOGLE_HEALTH_API_BASE", "https://health.googleapis.com/v4"),
             DataTypes = dataTypes.Length > 0
                 ? dataTypes
-                : ["weight", "sleep", "steps", "heart_rate", "nutrition-log"],
+                : ["weight", "sleep", "steps", "heart-rate", "nutrition-log"],
             SampleTypes = Opt("GOOGLE_HEALTH_SAMPLE_TYPES", string.Join(',', HealthFilter.DefaultSampleTypes))
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             PageSize = int.TryParse(Opt("GOOGLE_HEALTH_PAGE_SIZE", "1440"), out var ps) && ps >= 0 ? ps : 1440,
