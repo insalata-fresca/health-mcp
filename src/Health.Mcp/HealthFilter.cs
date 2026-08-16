@@ -49,7 +49,7 @@ public static class HealthFilter
     /// Override via <c>GOOGLE_HEALTH_SAMPLE_TYPES</c> when a 400 shows one is mis-binned —
     /// the error message names the field that was attempted, so the correction is obvious.
     /// </summary>
-    public static readonly string[] DefaultSampleTypes = ["weight", "height"];
+    public static readonly string[] DefaultSampleTypes = ["weight", "height", "heart-rate"];
 
     /// <summary>Classify a data type. <paramref name="sampleTypes"/> overrides the sample set.</summary>
     public static Kind ClassifyKind(string dataType, IEnumerable<string>? sampleTypes = null)
