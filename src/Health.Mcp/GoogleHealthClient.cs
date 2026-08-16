@@ -35,7 +35,7 @@ public sealed class GoogleHealthClient(HttpClient http, HealthOptions opt, ILogg
     /// so the caller surfaces a meaningful error.
     /// </summary>
     public async Task<JsonElement> ListDataPointsAsync(
-        string dataType, string? start, string? end, CancellationToken ct)
+        string dataType, string? start, string? end, int? pageSize, string? pageToken, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(dataType))
             throw new ArgumentException("dataType is required (e.g. weight, sleep, steps).", nameof(dataType));
@@ -44,10 +44,21 @@ public sealed class GoogleHealthClient(HttpClient http, HealthOptions opt, ILogg
 
         var url = $"{opt.HealthApiBase.TrimEnd('/')}/users/me/dataTypes/{Uri.EscapeDataString(dataType)}/dataPoints";
         var query = new List<string>();
-        if (!string.IsNullOrWhiteSpace(start) && !string.IsNullOrEmpty(opt.StartParam))
-            query.Add($"{opt.StartParam}={Uri.EscapeDataString(start)}");
-        if (!string.IsNullOrWhiteSpace(end) && !string.IsNullOrEmpty(opt.EndParam))
-            query.Add($"{opt.EndParam}={Uri.EscapeDataString(end)}");
+
+        // The window is ONE AIP-160 filter expression, not a start/end parameter pair —
+        // see HealthFilter for why the previous shape could never have worked.
+        var filter = HealthFilter.BuildWindow(dataType, start, end, opt.SampleTypes);
+        if (!string.IsNullOrEmpty(filter))
+            query.Add($"filter={Uri.EscapeDataString(filter)}");
+
+        // Default page size is the API's own 1440, not the 50 the caller used to get by
+        // accident; the API silently truncates anything above its 10000 ceiling.
+        var size = pageSize is > 0 ? pageSize.Value : opt.PageSize;
+        if (size > 0)
+            query.Add($"pageSize={size}");
+        if (!string.IsNullOrWhiteSpace(pageToken))
+            query.Add($"pageToken={Uri.EscapeDataString(pageToken)}");
+
         if (query.Count > 0)
             url += "?" + string.Join("&", query);
 
@@ -62,6 +73,69 @@ public sealed class GoogleHealthClient(HttpClient http, HealthOptions opt, ILogg
                 $"Google Health API {(int)resp.StatusCode} for dataType '{dataType}': {Truncate(body)}");
 
         using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// One row per day from <c>dataPoints:dailyRollUp</c> — the server-side daily aggregate.
+    /// This is the endpoint that makes a daily total a SINGLE call instead of paging through
+    /// hundreds of 1-2 minute raw records (steps arrive that finely).
+    ///
+    /// <para>Unlike <c>list</c>, this is a POST and the window lives in the BODY as a
+    /// <c>CivilTimeInterval</c> of calendar dates (closed-open). That <c>Interval</c>
+    /// carrying <c>startTime</c>/<c>endTime</c> on the sibling <c>:rollUp</c> is the most
+    /// likely origin of the original startTime/endTime query-param mistake.</para>
+    ///
+    /// <para><paramref name="dataSourceFamily"/> is the server-side answer to double
+    /// counting — with a phone and a watch both recording steps, summing raw points
+    /// inflates the total. Roll-up rows carry NO <c>dataSource</c> field, so this is the
+    /// only provenance control available at this granularity.</para>
+    ///
+    /// <para>Range ceiling is 90 days for most types, 14 for heart-rate / active-minutes /
+    /// total-calories / calories-in-heart-rate-zone. Not every type rolls up: notably
+    /// <c>sleep</c> and <c>daily-vo2-max</c> do not (only <c>run-vo2-max</c> does), and
+    /// those must go through <see cref="ListDataPointsAsync"/>.</para>
+    /// </summary>
+    public async Task<JsonElement> DailyRollUpAsync(
+        string dataType,
+        DateOnly start,
+        DateOnly end,
+        int? windowSizeDays,
+        string? dataSourceFamily,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(dataType))
+            throw new ArgumentException("dataType is required.", nameof(dataType));
+        if (end <= start)
+            throw new ArgumentException(
+                $"end ({end:yyyy-MM-dd}) must be after start ({start:yyyy-MM-dd}) — the range is closed-open.",
+                nameof(end));
+
+        var token = await GetAccessTokenAsync(ct).ConfigureAwait(false);
+        var url = $"{opt.HealthApiBase.TrimEnd('/')}/users/me/dataTypes/{Uri.EscapeDataString(dataType)}/dataPoints:dailyRollUp";
+
+        var body = new Dictionary<string, object?>
+        {
+            ["range"] = new Dictionary<string, object?>
+            {
+                ["start"] = new { date = new { year = start.Year, month = start.Month, day = start.Day } },
+                ["end"] = new { date = new { year = end.Year, month = end.Month, day = end.Day } },
+            },
+        };
+        if (windowSizeDays is > 0) body["windowSizeDays"] = windowSizeDays.Value;
+        if (!string.IsNullOrWhiteSpace(dataSourceFamily)) body["dataSourceFamily"] = dataSourceFamily;
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        var respBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Google Health API {(int)resp.StatusCode} for dailyRollUp '{dataType}': {Truncate(respBody)}");
+
+        using var doc = JsonDocument.Parse(respBody);
         return doc.RootElement.Clone();
     }
 

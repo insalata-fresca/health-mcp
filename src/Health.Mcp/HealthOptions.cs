@@ -34,17 +34,33 @@ public sealed record HealthOptions
     /// </summary>
     public string[] DataTypes { get; init; } = ["weight", "sleep", "steps", "heart_rate"];
 
-    /// <summary>
-    /// Query-parameter name forwarded for a caller-supplied window START, when the
-    /// caller passes one. UNVERIFIED against the live v4 API (the initial probe proved
-    /// only the param-less list) — env-overridable so the running service can be tuned to
-    /// the real param name without a rebuild. Empty ⇒ never forward a start param.
-    /// </summary>
-    public string StartParam { get; init; } = "startTime";
+    // ── Time window ─────────────────────────────────────────────────────────
+    // StartParam/EndParam are GONE. They defaulted to startTime/endTime, which the v4 API
+    // has no such query parameters for — list accepts only parent/filter/pageSize/pageToken —
+    // so every windowed call 400'd on every data type from the day this shipped. They were
+    // left env-overridable "so the real names can be set without a rebuild", but the real
+    // API needs a different SHAPE (one AIP-160 filter string whose field varies per data
+    // type), not a different name, so no env value could ever have fixed it. See HealthFilter.
 
-    /// <summary>Query-parameter name for a caller-supplied window END. Same UNVERIFIED
-    /// caveat as <see cref="StartParam"/>. Empty ⇒ never forward an end param.</summary>
-    public string EndParam { get; init; } = "endTime";
+    /// <summary>
+    /// Data types whose time coordinate is a <c>sample_time</c> rather than an interval,
+    /// which changes the filter field. VERIFIED for <c>weight</c> and <c>height</c>; every
+    /// other type takes the documented Interval default. Env
+    /// <c>GOOGLE_HEALTH_SAMPLE_TYPES</c> (comma-separated) — kept overridable because this
+    /// classification, unlike the filter shape, is the one part still inferred per type: if
+    /// a type 400s, the error names the field that was tried and the correction is a config
+    /// edit rather than a rebuild.
+    /// </summary>
+    public string[] SampleTypes { get; init; } = HealthFilter.DefaultSampleTypes;
+
+    /// <summary>
+    /// Page size for list calls. Defaults to the API's own default of 1440 rather than the
+    /// 50 callers were getting before (raw steps arrive in 1-2 minute records, so 50 covered
+    /// barely three hours). The API silently truncates above its 10000 ceiling. Note
+    /// <c>exercise</c> and <c>sleep</c> cap at 25 upstream regardless of what is sent.
+    /// Env <c>GOOGLE_HEALTH_PAGE_SIZE</c>; 0 ⇒ send none and take the server default.
+    /// </summary>
+    public int PageSize { get; init; } = 1440;
 
     // ── Nutrition WRITE (log_nutrition) config ──────────────────────────────
     // Every shape/enum below was VERIFIED against the Google Health API v4 discovery
@@ -134,8 +150,9 @@ public sealed record HealthOptions
             DataTypes = dataTypes.Length > 0
                 ? dataTypes
                 : ["weight", "sleep", "steps", "heart_rate", "nutrition-log"],
-            StartParam = Opt("GOOGLE_HEALTH_START_PARAM", "startTime"),
-            EndParam = Opt("GOOGLE_HEALTH_END_PARAM", "endTime"),
+            SampleTypes = Opt("GOOGLE_HEALTH_SAMPLE_TYPES", string.Join(',', HealthFilter.DefaultSampleTypes))
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            PageSize = int.TryParse(Opt("GOOGLE_HEALTH_PAGE_SIZE", "1440"), out var ps) && ps >= 0 ? ps : 1440,
             NutritionWriteEnabled = Flag("GOOGLE_HEALTH_NUTRITION_WRITE_ENABLED", true),
             NutritionDataType = Opt("GOOGLE_HEALTH_NUTRITION_DATATYPE", "nutrition-log"),
             NutritionWrapperKey = Opt("GOOGLE_HEALTH_NUTRITION_WRAPPER_KEY", "nutritionLog"),

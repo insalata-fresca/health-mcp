@@ -45,14 +45,69 @@ public sealed class HealthTools
 
     [McpServerTool(Name = "list_steps")]
     [Description(
-        "List step-count data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
-        "start/end bound the window. Verified data type.")]
+        "List RAW step-count data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
+        "start/end bound the window. NOTE: raw steps arrive as 1-2 minute records AND a phone and a watch " +
+        "commonly both record the same walking — so summing these without `source` DOUBLE COUNTS. " +
+        "For a daily total use daily_total instead, which aggregates server-side.")]
     public static Task<string> ListSteps(
         GoogleHealthClient client,
         [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
         [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        [Description("Optional source filter to avoid double counting: a formFactor (watch|phone), a platform " +
+                     "(HEALTH_CONNECT), or part of the writing app id (e.g. garmin). Empty = all sources.")] string source = "",
         CancellationToken ct = default)
-        => ListAsync(client, "steps", start, end, ct);
+        => ListAsync(client, "steps", start, end, ct, source);
+
+    [McpServerTool(Name = "daily_total")]
+    [Description(
+        "Server-side DAILY AGGREGATE for a data type (Google Health dataPoints:dailyRollUp) — one row per " +
+        "day. This is the right tool for 'how many steps today/this week': it returns the daily total in a " +
+        "SINGLE call instead of paging through hundreds of raw 1-2 minute records, and it aggregates " +
+        "server-side so it does not double count a phone and a watch. Dates are YYYY-MM-DD, the range is " +
+        "closed-open (end is EXCLUSIVE, so use tomorrow's date for today). Max range 90 days for most types, " +
+        "14 for heart-rate/active-minutes/total-calories/calories-in-heart-rate-zone. NOT every type rolls " +
+        "up — sleep and daily-vo2-max do not (use list_datapoints for those); steps, distance, heart-rate, " +
+        "weight, active-energy-burned and run-vo2-max do.")]
+    public static async Task<string> DailyTotal(
+        GoogleHealthClient client,
+        [Description("Data type to aggregate, e.g. steps, distance, active-energy-burned.")] string dataType,
+        [Description("Range start, inclusive, as YYYY-MM-DD.")] string start,
+        [Description("Range end, EXCLUSIVE, as YYYY-MM-DD. For a single day pass the next day.")] string end,
+        [Description("Optional provenance scope: all-sources (default), google-wearables (excludes manual " +
+                     "entries), or google-sources. Roll-up rows carry no per-point source, so this is the " +
+                     "only provenance control here.")] string sourceFamily = "",
+        [Description("Days per aggregation window. Default 1 = one row per day.")] int windowSizeDays = 1,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (!DateOnly.TryParse(start, out var s))
+                throw new ArgumentException($"start '{start}' is not a YYYY-MM-DD date.");
+            if (!DateOnly.TryParse(end, out var e))
+                throw new ArgumentException($"end '{end}' is not a YYYY-MM-DD date.");
+
+            var family = string.IsNullOrWhiteSpace(sourceFamily)
+                ? null
+                : sourceFamily.Contains('/', StringComparison.Ordinal)
+                    ? sourceFamily.Trim()
+                    : $"users/me/dataSourceFamilies/{sourceFamily.Trim()}";
+
+            var result = await client.DailyRollUpAsync(dataType, s, e, windowSizeDays, family, ct)
+                .ConfigureAwait(false);
+
+            return JsonSerializer.Serialize(new
+            {
+                dataType,
+                range = new { start = s.ToString("yyyy-MM-dd"), end_exclusive = e.ToString("yyyy-MM-dd") },
+                sourceFamily = family,
+                rollup = result,
+            }, _json);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { dataType, error = ex.Message }, _json);
+        }
+    }
 
     [McpServerTool(Name = "list_nutrition")]
     [Description(
@@ -78,8 +133,12 @@ public sealed class HealthTools
         [Description("Google Health data type, e.g. weight, sleep, steps, heart_rate.")] string dataType,
         [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
         [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        [Description("Optional source filter: formFactor (watch|phone), platform (HEALTH_CONNECT), or part " +
+                     "of the writing app id (e.g. garmin). Empty = all sources.")] string source = "",
+        [Description("Optional page size. Empty/0 = the configured default (1440).")] int pageSize = 0,
+        [Description("Optional pageToken from a previous response's nextPageToken.")] string pageToken = "",
         CancellationToken ct = default)
-        => ListAsync(client, dataType, start, end, ct);
+        => ListAsync(client, dataType, start, end, ct, source, pageSize > 0 ? pageSize : null, pageToken);
 
     [McpServerTool(Name = "list_data_types")]
     [Description(
@@ -149,7 +208,7 @@ public sealed class HealthTools
         string? dedupNote = null;
         try
         {
-            var existing = await client.ListDataPointsAsync(opt.NutritionDataType, null, null, ct)
+            var existing = await client.ListDataPointsAsync(opt.NutritionDataType, null, null, null, null, ct)
                 .ConfigureAwait(false);
             if (existing.ValueKind == JsonValueKind.Object
                 && existing.TryGetProperty("dataPoints", out var dps)
@@ -429,7 +488,8 @@ public sealed class HealthTools
         => JsonSerializer.Serialize(new { status, dataType, note }, _json);
 
     private static async Task<string> ListAsync(
-        GoogleHealthClient client, string dataType, string start, string end, CancellationToken ct)
+        GoogleHealthClient client, string dataType, string start, string end, CancellationToken ct,
+        string source = "", int? pageSize = null, string pageToken = "")
     {
         try
         {
@@ -437,19 +497,25 @@ public sealed class HealthTools
                 dataType,
                 string.IsNullOrWhiteSpace(start) ? null : start,
                 string.IsNullOrWhiteSpace(end) ? null : end,
+                pageSize,
+                string.IsNullOrWhiteSpace(pageToken) ? null : pageToken,
                 ct).ConfigureAwait(false);
 
-            var count = result.ValueKind == JsonValueKind.Object
-                        && result.TryGetProperty("dataPoints", out var dp)
-                        && dp.ValueKind == JsonValueKind.Array
-                ? dp.GetArrayLength()
-                : (int?)null;
+            // list has no dataSourceFamily parameter (only reconcile/rollUp do), so source
+            // selection happens here on the returned points' own dataSource provenance.
+            var points = ExtractPoints(result);
+            var filtered = string.IsNullOrWhiteSpace(source)
+                ? points
+                : points.Where(p => MatchesSource(p, source)).ToList();
 
             return JsonSerializer.Serialize(new
             {
                 dataType,
-                count,
-                dataPoints = result,
+                count = filtered.Count,
+                count_before_source_filter = string.IsNullOrWhiteSpace(source) ? (int?)null : points.Count,
+                source = string.IsNullOrWhiteSpace(source) ? null : source,
+                nextPageToken = TryGetToken(result),
+                dataPoints = filtered,
             }, _json);
         }
         catch (Exception ex)
@@ -460,5 +526,64 @@ public sealed class HealthTools
                 error = ex.Message,
             }, _json);
         }
+    }
+
+    /// <summary>The response nests the array one level down as <c>{dataPoints:{dataPoints:[…]}}</c>.</summary>
+    private static List<JsonElement> ExtractPoints(JsonElement result)
+    {
+        if (result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("dataPoints", out var inner)
+            && inner.ValueKind == JsonValueKind.Array)
+            return inner.EnumerateArray().ToList();
+        return [];
+    }
+
+    private static string? TryGetToken(JsonElement result)
+        => result.ValueKind == JsonValueKind.Object
+           && result.TryGetProperty("nextPageToken", out var t)
+           && t.ValueKind == JsonValueKind.String
+            ? t.GetString()
+            : null;
+
+    /// <summary>
+    /// Match a point against a source selector. Accepts a <c>formFactor</c> (<c>watch</c>,
+    /// <c>phone</c>, …), a <c>platform</c> (<c>HEALTH_CONNECT</c>), or any substring of the
+    /// writing app's package name (<c>garmin</c> matches
+    /// <c>com.garmin.android.apps.connectmobile</c>).
+    ///
+    /// <para>This exists because a phone and a watch commonly record the SAME activity — on
+    /// this account 45 of 50 step records came from a phone and 5 from a watch over the same
+    /// window — so summing unfiltered points double-counts.</para>
+    /// </summary>
+    private static bool MatchesSource(JsonElement point, string source)
+    {
+        if (point.ValueKind != JsonValueKind.Object
+            || !point.TryGetProperty("dataSource", out var ds)
+            || ds.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var want = source.Trim();
+
+        if (ds.TryGetProperty("device", out var dev)
+            && dev.ValueKind == JsonValueKind.Object
+            && dev.TryGetProperty("formFactor", out var ff)
+            && ff.ValueKind == JsonValueKind.String
+            && string.Equals(ff.GetString(), want, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (ds.TryGetProperty("platform", out var pf)
+            && pf.ValueKind == JsonValueKind.String
+            && string.Equals(pf.GetString(), want, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (ds.TryGetProperty("application", out var app)
+            && app.ValueKind == JsonValueKind.Object
+            && app.TryGetProperty("packageName", out var pkg)
+            && pkg.ValueKind == JsonValueKind.String
+            && pkg.GetString() is { } name
+            && name.Contains(want, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
     }
 }
