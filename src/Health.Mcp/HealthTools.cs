@@ -20,43 +20,65 @@ public sealed class HealthTools
     private static readonly JsonSerializerOptions _json =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    /// <summary>
+    /// The paging clause shared by every list tool's description.
+    ///
+    /// <para>The server already returned <c>nextPageToken</c> and already accepted a
+    /// <c>pageToken</c> on the generic reader — but the typed tools took neither, and no
+    /// description mentioned either. So the cursor existed end to end and was reachable from
+    /// nowhere, and a caller that received a first page had no way to know, or to say, that it was
+    /// only the first.</para>
+    /// </summary>
+    private const string PAGEDOC =
+        "Paged: the response carries `nextPageToken` when more data points exist beyond this page — " +
+        "pass it back as `pageToken` to continue, and treat its ABSENCE as the only proof you have " +
+        "the whole window. `pageSize` caps one page. ";
+
     [McpServerTool(Name = "list_weight")]
     [Description(
         "List body-weight data points from Google Health (Withings + Garmin + phone, aggregated via " +
         "Health Connect). Read-only. Optional ISO-8601 start/end bound the window when supplied. " +
-        "Verified data type.")]
+        PAGEDOC + "Verified data type.")]
     public static Task<string> ListWeight(
         GoogleHealthClient client,
         [Description("Optional ISO-8601 window start (e.g. 2026-07-01T00:00:00Z). Empty = no start bound.")] string start = "",
         [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        [Description("Optional page size. Empty/0 = the configured default (1440).")] int pageSize = 0,
+        [Description("Optional pageToken from a previous response's nextPageToken.")] string pageToken = "",
         CancellationToken ct = default)
-        => ListAsync(client, "weight", start, end, ct);
+        => ListAsync(client, "weight", start, end, ct, pageSize: pageSize > 0 ? pageSize : null, pageToken: pageToken);
 
     [McpServerTool(Name = "list_sleep")]
     [Description(
         "List sleep data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
-        "start/end bound the window. Verified data type.")]
+        "start/end bound the window. " + PAGEDOC + "Verified data type.")]
     public static Task<string> ListSleep(
         GoogleHealthClient client,
         [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
         [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
+        [Description("Optional page size. Empty/0 = the configured default (1440).")] int pageSize = 0,
+        [Description("Optional pageToken from a previous response's nextPageToken.")] string pageToken = "",
         CancellationToken ct = default)
-        => ListAsync(client, "sleep", start, end, ct);
+        => ListAsync(client, "sleep", start, end, ct, pageSize: pageSize > 0 ? pageSize : null, pageToken: pageToken);
 
     [McpServerTool(Name = "list_steps")]
     [Description(
         "List RAW step-count data points from Google Health (Garmin + phone). Read-only. Optional ISO-8601 " +
         "start/end bound the window. NOTE: raw steps arrive as 1-2 minute records AND a phone and a watch " +
         "commonly both record the same walking — so summing these without `source` DOUBLE COUNTS. " +
-        "For a daily total use daily_total instead, which aggregates server-side.")]
+        "For a daily total use daily_total instead, which aggregates server-side. " + PAGEDOC +
+        "NOTE: a source filter is applied AFTER paging, so a page can come back empty while more " +
+        "pages still hold matching points — keep following nextPageToken.")]
     public static Task<string> ListSteps(
         GoogleHealthClient client,
         [Description("Optional ISO-8601 window start. Empty = no start bound.")] string start = "",
         [Description("Optional ISO-8601 window end. Empty = no end bound.")] string end = "",
         [Description("Optional source filter to avoid double counting: a formFactor (watch|phone), a platform " +
                      "(HEALTH_CONNECT), or part of the writing app id (e.g. garmin). Empty = all sources.")] string source = "",
+        [Description("Optional page size. Empty/0 = the configured default (1440).")] int pageSize = 0,
+        [Description("Optional pageToken from a previous response's nextPageToken.")] string pageToken = "",
         CancellationToken ct = default)
-        => ListAsync(client, "steps", start, end, ct, source);
+        => ListAsync(client, "steps", start, end, ct, source, pageSize > 0 ? pageSize : null, pageToken);
 
     [McpServerTool(Name = "daily_total")]
     [Description(
@@ -127,7 +149,10 @@ public sealed class HealthTools
         "Generic read of Google Health API v4 data points for ANY data type string. Read-only. " +
         "dataType examples: weight, sleep, steps (verified), heart_rate / activity types (coverage " +
         "to be confirmed against the live account). Optional ISO-8601 start/end bound the window when " +
-        "supplied. Use the typed tools (health_list_weight/sleep/steps) for the common cases.")]
+        "supplied. " + PAGEDOC +
+        "NOTE: a source filter is applied AFTER paging, so a page can come back empty while more " +
+        "pages still hold matching points. " +
+        "Use the typed tools (health_list_weight/sleep/steps) for the common cases.")]
     public static Task<string> ListDatapoints(
         GoogleHealthClient client,
         [Description("Google Health data type, e.g. weight, sleep, steps, heart_rate.")] string dataType,
